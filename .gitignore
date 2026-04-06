@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+venv/
+env/
+deepface_env/
+emotion_env/
+main_env/
+
+temp_face.jpg
+temp_frame.jpg
