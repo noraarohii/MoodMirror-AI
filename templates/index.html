@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Meme Cam ✨</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      background: #0f0f13;
+      font-family: 'Segoe UI', sans-serif;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px 20px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .header h1 {
+      font-size: 2.2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #f9a8d4, #a78bfa, #67e8f9);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -0.5px;
+    }
+
+    .header p {
+      color: #888;
+      font-size: 0.95rem;
+      margin-top: 6px;
+    }
+
+    .camera-wrapper {
+      position: relative;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.08),
+                  0 20px 60px rgba(0,0,0,0.6);
+    }
+
+    .camera-wrapper img {
+      display: block;
+      width: 640px;
+      max-width: 100%;
+      border-radius: 20px;
+    }
+
+    .instructions {
+      margin-top: 24px;
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 999px;
+      padding: 8px 18px;
+      font-size: 0.88rem;
+      color: #ccc;
+    }
+
+    .pill .icon {
+      font-size: 1.1rem;
+    }
+
+    .pill strong {
+      color: #fff;
+    }
+
+    .emotions-row {
+      margin-top: 24px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .emotion-badge {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 10px 20px;
+      font-size: 0.85rem;
+      color: #aaa;
+      text-align: center;
+    }
+
+    .emotion-badge .emoji {
+      font-size: 1.5rem;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    footer {
+      margin-top: 40px;
+      color: #444;
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>✨ Meme Cam</h1>
+    <p>Show your face — get a meme. It's that simple.</p>
+  </div>
+
+  <div class="camera-wrapper">
+    <img src="/video_feed" alt="Live Camera Feed"/>
+  </div>
+
+  <div class="instructions">
+    <div class="pill">
+      <span class="icon">☝️</span>
+      <span><strong>1 finger</strong> — show meme</span>
+    </div>
+    <div class="pill">
+      <span class="icon">✌️</span>
+      <span><strong>2 fingers</strong> — take screenshot</span>
+    </div>
+    <div class="pill">
+      <span class="icon">🤚</span>
+      <span><strong>no hand</strong> — hide meme</span>
+    </div>
+  </div>
+
+  <div class="emotions-row">
+    <div class="emotion-badge"><span class="emoji">😊</span>happy</div>
+    <div class="emotion-badge"><span class="emoji">😢</span>sad</div>
+    <div class="emotion-badge"><span class="emoji">😠</span>angry</div>
+    <div class="emotion-badge"><span class="emoji">😐</span>neutral</div>
+  </div>
+
+  <footer>built with opencv · mediapipe · hsemotion</footer>
+
+</body>
+</html>

@@ -7,14 +7,17 @@ import time
 import threading
 import urllib.request
 import numpy as np
-from emotion_detector import detect_emotion, reset_history
+from flask import Flask, render_template, Response, send_from_directory
+from emotion_detector import detect_emotion
+
+app = Flask(__name__)
 
 CAMERA_INDEX = 0
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
-MEME_WIDTH = 200
-MEME_HEIGHT = 200
+MEME_WIDTH = 180
+MEME_HEIGHT = 180
 
 SCREENSHOT_FOLDER = "screenshots"
 os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
@@ -29,14 +32,14 @@ MEME_PATHS = {
 HAND_MODEL_PATH = "hand_landmarker.task"
 HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
 
-emotion_check_interval = 0.5
+emotion_check_interval = 0.3
 last_emotion_check = 0
-last_face_seen = 0
 current_emotion = "neutral"
 current_confidence = 0.0
 emotion_busy = False
+show_meme = False
+current_fingers = 0
 
-# Haar cascade – fast, works fine for frontal webcam
 face_cascade = cv2.CascadeClassifier(
     cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 )
@@ -58,6 +61,13 @@ def download_model():
         print("[INFO] Download complete.")
 
 
+def preprocess_face(img):
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    lab = cv2.merge((l, a, b))
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
 def load_memes():
@@ -79,7 +89,6 @@ def load_memes():
 
 def emotion_worker_thread(face_img):
     global current_emotion, current_confidence, emotion_busy
-
     try:
         emotion, confidence = detect_emotion(face_img)
         current_emotion = emotion
@@ -87,48 +96,30 @@ def emotion_worker_thread(face_img):
         print(f"[DETECTED] {emotion} ({confidence:.1f}%)")
     except Exception as e:
         print("[ERROR]", e)
-
     emotion_busy = False
 
 
 def start_emotion_detection(frame):
-    global emotion_busy, last_face_seen
-
+    global emotion_busy
     if emotion_busy:
         return
-
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=4,
-        minSize=(60, 60),
-        maxSize=(500, 500),
+        gray, scaleFactor=1.1, minNeighbors=8,
+        minSize=(80, 80), maxSize=(400, 400),
     )
-
     if len(faces) == 0:
-        if time.time() - last_face_seen > 2.0:
-            reset_history()
         return
-
-    last_face_seen = time.time()
-
-    # Pick the largest detected face
-    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-
-    # Generous padding — forehead + chin improve emotion accuracy
-    pad_x     = int(w * 0.35)
-    pad_y_top = int(h * 0.50)
-    pad_y_bot = int(h * 0.30)
+    x, y, w, h = faces[0]
+    pad_x = int(w * 0.5)
+    pad_y = int(h * 0.6)
     x1 = max(0, x - pad_x)
-    y1 = max(0, y - pad_y_top)
+    y1 = max(0, y - pad_y)
     x2 = min(frame.shape[1], x + w + pad_x)
-    y2 = min(frame.shape[0], y + h + pad_y_bot)
+    y2 = min(frame.shape[0], y + h + pad_y)
     face_img = frame[y1:y2, x1:x2]
-
     if face_img.size == 0:
         return
-
     emotion_busy = True
     threading.Thread(
         target=emotion_worker_thread,
@@ -149,21 +140,15 @@ def count_fingers(lm):
 
 def overlay_meme(frame, meme, emotion):
     if meme is None:
-        cv2.putText(frame, f"{emotion} meme not found",
-                    (frame.shape[1] - 220, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
         return frame
-
     fh, fw = frame.shape[:2]
     mh, mw = meme.shape[:2]
     x1 = fw - mw - 10
     y1 = 10
     x2 = x1 + mw
     y2 = y1 + mh
-
     if x1 < 0 or y1 < 0 or x2 > fw or y2 > fh:
         return frame
-
     frame[y1:y2, x1:x2] = meme
     cv2.rectangle(frame, (x1, y2 + 5), (x2, y2 + 30), (0, 0, 0), -1)
     cv2.putText(frame, f"MEME: {emotion}",
@@ -172,29 +157,32 @@ def overlay_meme(frame, meme, emotion):
     return frame
 
 
-def draw_confidence_bar(frame, emotion, confidence):
-    bar_x, bar_y = 10, 80
-    bar_w, bar_h = 160, 10
-
-    color_map = {
+def draw_ui(frame, emotion, confidence, fingers):
+    emotion_colors = {
         "happy":   (0, 220, 100),
         "sad":     (200, 100, 50),
         "angry":   (0, 50, 220),
         "neutral": (160, 160, 160),
     }
-    color = color_map.get(emotion, (160, 160, 160))
+    color = emotion_colors.get(emotion, (160, 160, 160))
 
-    cv2.rectangle(frame, (bar_x, bar_y),
-                  (bar_x + bar_w, bar_y + bar_h), (50, 50, 50), -1)
-    fill_w = int(bar_w * min(confidence, 100.0) / 100.0)
+    # Emotion label
+    cv2.putText(frame, f"{emotion.upper()}",
+                (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
+
+    # Confidence bar background
+    cv2.rectangle(frame, (10, 45), (170, 58), (50, 50, 50), -1)
+    fill_w = int(160 * min(confidence, 100.0) / 100.0)
     if fill_w > 0:
-        cv2.rectangle(frame, (bar_x, bar_y),
-                      (bar_x + fill_w, bar_y + bar_h), color, -1)
-    cv2.rectangle(frame, (bar_x, bar_y),
-                  (bar_x + bar_w, bar_y + bar_h), (100, 100, 100), 1)
+        cv2.rectangle(frame, (10, 45), (10 + fill_w, 58), color, -1)
     cv2.putText(frame, f"{confidence:.0f}%",
-                (bar_x + bar_w + 6, bar_y + 9),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+                (175, 57), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+
+    # Finger count
+    cv2.putText(frame, f"fingers: {fingers}",
+                (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+    return frame
 
 
 def save_screenshot(frame):
@@ -202,57 +190,39 @@ def save_screenshot(frame):
         SCREENSHOT_FOLDER, f"screenshot_{int(time.time())}.png")
     cv2.imwrite(filename, frame)
     print("[INFO] Saved:", filename)
+    return filename
 
 
-def main():
-    global last_emotion_check
+def generate_frames(memes, landmarker):
+    global last_emotion_check, show_meme, current_fingers
 
-    download_model()
-    memes = load_memes()
+    countdown = False
+    countdown_start = 0
+    captured = False
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
-    if not cap.isOpened():
-        print("[ERROR] Camera could not open")
-        return
-
-    base_options = python.BaseOptions(model_asset_path=HAND_MODEL_PATH)
-    options = vision.HandLandmarkerOptions(
-        base_options=base_options,
-        num_hands=1,
-        min_hand_detection_confidence=0.6,
-        min_hand_presence_confidence=0.6,
-        min_tracking_confidence=0.6,
-        running_mode=vision.RunningMode.IMAGE,
-    )
-    landmarker = vision.HandLandmarker.create_from_options(options)
-
-    show_meme = False
-    countdown = False
-    countdown_start = 0
-    captured = False
-    fingers = 0
-
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("[ERROR] Failed to read frame")
             break
 
         frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
         frame = cv2.flip(frame, 1)
         display = frame.copy()
 
+        # Face box
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=4,
-            minSize=(60, 60), maxSize=(500, 500),
+            gray, scaleFactor=1.1, minNeighbors=8,
+            minSize=(80, 80), maxSize=(400, 400),
         )
         for (x, y, w, h) in faces:
-            cv2.rectangle(display, (x, y), (x + w, y + h), (0, 200, 255), 2)
+            cv2.rectangle(display, (x, y), (x + w, y + h), (255, 100, 100), 1)
 
+        # Hand detection
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result = landmarker.detect(mp_image)
@@ -264,11 +234,12 @@ def main():
             h_px, w_px = frame.shape[:2]
             pts = [(int(p.x * w_px), int(p.y * h_px)) for p in lm]
             for a, b in MP_HAND_CONNECTIONS:
-                cv2.line(display, pts[a], pts[b], (255, 255, 255), 2)
+                cv2.line(display, pts[a], pts[b], (200, 200, 200), 1)
             for pt in pts:
-                cv2.circle(display, pt, 4, (255, 0, 0), -1)
+                cv2.circle(display, pt, 3, (100, 180, 255), -1)
 
             fingers = count_fingers(lm)
+            current_fingers = fingers
 
             if fingers == 1:
                 show_meme = True
@@ -288,49 +259,72 @@ def main():
             show_meme = False
             countdown = False
             captured = False
+            current_fingers = 0
 
-        # Always run emotion detection (not just when meme is shown)
-        # so the temporal history is always warm and ready.
-        if time.time() - last_emotion_check > emotion_check_interval:
+        # Emotion detection
+        if show_meme and (time.time() - last_emotion_check > emotion_check_interval):
             start_emotion_detection(frame)
             last_emotion_check = time.time()
 
         if show_meme:
-            display = overlay_meme(
-                display, memes.get(current_emotion), current_emotion)
+            display = overlay_meme(display, memes.get(current_emotion), current_emotion)
 
-        cv2.putText(display, f"Emotion: {current_emotion}",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        draw_confidence_bar(display, current_emotion, current_confidence)
-        cv2.putText(display, f"Fingers: {fingers}",
-                    (10, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
+        # Countdown
         if countdown:
             elapsed = time.time() - countdown_start
             remaining = max(1, 3 - int(elapsed))
             if elapsed < 3:
-                cv2.putText(display, f"Screenshot in {remaining}",
-                            (140, 240), cv2.FONT_HERSHEY_SIMPLEX,
-                            1, (0, 0, 255), 3)
+                cv2.putText(display, f"{remaining}",
+                            (300, 260), cv2.FONT_HERSHEY_SIMPLEX,
+                            4, (0, 100, 255), 6)
             elif not captured:
                 save_screenshot(display)
                 captured = True
                 countdown = False
 
-        cv2.putText(display,
-                    "1 finger = meme | 2 fingers = screenshot | q = quit",
-                    (10, FRAME_HEIGHT - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        display = draw_ui(display, current_emotion, current_confidence, fingers)
 
-        cv2.imshow("AI Meme Camera", display)
+        _, buffer = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        frame_bytes = buffer.tobytes()
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        yield (b"--frame\r\n"
+               b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
 
-    landmarker.close()
     cap.release()
-    cv2.destroyAllWindows()
+
+
+memes = load_memes()
+download_model()
+
+base_options = python.BaseOptions(model_asset_path=HAND_MODEL_PATH)
+options = vision.HandLandmarkerOptions(
+    base_options=base_options,
+    num_hands=1,
+    min_hand_detection_confidence=0.6,
+    min_hand_presence_confidence=0.6,
+    min_tracking_confidence=0.6,
+    running_mode=vision.RunningMode.IMAGE,
+)
+landmarker = vision.HandLandmarker.create_from_options(options)
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/video_feed")
+def video_feed():
+    return Response(
+        generate_frames(memes, landmarker),
+        mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.route("/screenshots/<filename>")
+def screenshot(filename):
+    return send_from_directory(SCREENSHOT_FOLDER, filename)
 
 
 if __name__ == "__main__":
-    main()
+    app.run(debug=False, threaded=True)
